@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template for static app deployment with S3, CloudFront and secure OAI'
+
+Parameters:
+  Environment:
+    Type: String
+    Description: 'The environment name'
+  StackPrefix:
+    Type: String
+    Description: 'The prefix for stack resources'
+
+Resources:
+  # S3 Bucket for static UI files (React/Angular/Vue)
+  HostingBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${StackPrefix}-${Environment}-hosting'
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+
+  # CloudFront Origin Access Identity (OAI)
+  # Ensures all traffic is funnelled securely through your CDN
+  HostingCloudFrontOAI:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub 'OAI for ${StackPrefix}-${Environment}-hosting'
+
+  # Bucket Policy
+  # Prevents unauthorized access to your bucket files/data
+  HostingBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref HostingBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              CanonicalUser: !GetAtt HostingCloudFrontOAI.S3CanonicalUserId
+            Action: 's3:GetObject'
+            Resource: !Sub '${HostingBucket.Arn}/*'
+
+  # CloudFront Distribution
+  # The CDN that your bucket sits behind
+  HostingCloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Origins:
+          - DomainName: !GetAtt HostingBucket.RegionalDomainName
+            Id: S3Origin
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub 'origin-access-identity/cloudfront/${HostingCloudFrontOAI}'
+        Enabled: true
+        DefaultRootObject: index.html
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          TargetOriginId: S3Origin
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+
+# Easy to reference outputs
+Outputs:
+  BucketName:
+    Description: 'Name of S3 bucket to hold website content'
+    Value: !Ref HostingBucket
+
+  CloudFrontDomainName:
+    Description: 'Domain name of CloudFront distribution'
+    Value: !GetAtt HostingCloudFrontDistribution.DomainName
+
+  CloudFrontDistributionId:
+    Description: 'ID of CloudFront distribution'
+    Value: !Ref HostingCloudFrontDistribution
